@@ -119,6 +119,19 @@ dev-run:
         {{NETWORK_ARGS}} \
         "{{LOCAL_RUNTIME_IMAGE_REF}}"
 
+# Produce the detailed development-set evaluation CSV from submission_src/evaluate.py.
+# Unlike a competition run, this writes submission/local_evaluation.csv with
+# references, per-clip WER, and the token-level language-ID diagnostics.
+[group('development')]
+dev-evaluate:
+    docker run \
+        --rm \
+        {{MOUNT_DATA}} \
+        {{MOUNT_SUBMISSION}} \
+        {{NETWORK_ARGS}} \
+        "{{LOCAL_RUNTIME_IMAGE_REF}}" \
+        bash -lc 'cd /code_execution && unzip ./submission/submission.zip -d ./src && uv run src/evaluate.py'
+
 # Run local dev runtime image with interactive shell
 [group('development')]
 dev-interact:
