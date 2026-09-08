@@ -1,0 +1,27 @@
+# Lightweight local-only CPU runtime. This is not the official competition
+# image; it is intended to validate the vendored Whisper/LoRA inference path
+# on hosts without NVIDIA CUDA support.
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU wheels avoid CUDA libraries, TensorFlow, vLLM, Qwen ASR, and the other
+# large competition-only dependencies. PEFT pulls its compatible Transformers
+# dependencies; safetensors loads the submitted LoRA adapter.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.11.0+cpu \
+    && pip install peft==0.20.0 safetensors==0.8.0
+
+WORKDIR /code_execution
+RUN mkdir -p /code_execution/src /code_execution/submission
+
+COPY entrypoint_cpu.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+CMD ["bash", "/entrypoint.sh"]

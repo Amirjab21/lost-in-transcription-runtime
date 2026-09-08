@@ -4,6 +4,7 @@ block_internet := "true"
 
 IMAGE_NAME := "lost-in-transcription-competition"
 LOCAL_RUNTIME_IMAGE_REF := f"local.invalid/{{IMAGE_NAME}}:dev"
+LOCAL_CPU_IMAGE_REF := f"local.invalid/{{IMAGE_NAME}}:cpu"
 LOCAL_TEST_IMAGE_REF := f"local.invalid/{{IMAGE_NAME}}:test"
 RUNTIME_IMAGE_REF := f"lostintranscriptionprodacr.azurecr.io/{{IMAGE_NAME}}:latest"
 
@@ -118,6 +119,34 @@ dev-run:
         {{MOUNT_SUBMISSION}} \
         {{NETWORK_ARGS}} \
         "{{LOCAL_RUNTIME_IMAGE_REF}}"
+
+# Build a small local-only Python 3.12 CPU image. It excludes CUDA,
+# TensorFlow, vLLM, and other official-runtime dependencies.
+[group('development')]
+cpu-build:
+    docker build runtime/ --platform=linux/amd64 --file runtime/Dockerfile.cpu --tag "{{LOCAL_CPU_IMAGE_REF}}"
+
+# Run normal submission inference in the local CPU image. This may be slow for
+# Whisper large-v3; use cpu-evaluate for a limited model smoke test.
+[group('development')]
+cpu-run:
+    docker run \
+        --rm \
+        {{MOUNT_DATA}} \
+        {{MOUNT_SUBMISSION}} \
+        {{NETWORK_ARGS}} \
+        "{{LOCAL_CPU_IMAGE_REF}}"
+
+# Evaluate a limited number of development clips in the local CPU image.
+[group('development')]
+cpu-evaluate LIMIT="1":
+    docker run \
+        --rm \
+        {{MOUNT_DATA}} \
+        {{MOUNT_SUBMISSION}} \
+        {{NETWORK_ARGS}} \
+        "{{LOCAL_CPU_IMAGE_REF}}" \
+        bash -lc 'cd /code_execution && unzip -q ./submission/submission.zip -d ./src && python ./src/evaluate.py --limit "{{LIMIT}}"'
 
 # Produce the detailed development-set evaluation CSV from submission_src/evaluate.py.
 # Unlike a competition run, this writes submission/local_evaluation.csv with
