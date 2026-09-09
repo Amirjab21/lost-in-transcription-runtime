@@ -8,3 +8,5 @@
 !entrypoint.sh
 !pyproject.toml
 !uv.lock
+
+!entrypoint_cpu.sh

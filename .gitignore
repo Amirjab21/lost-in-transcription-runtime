@@ -4,8 +4,7 @@ data-archive/
 
 submission/*
 !submission/.gitkeep
-submission_src/*
-!submission_src/.gitkeep
+
 
 examples/*/model/
 
@@ -72,3 +71,5 @@ ENV/
 
 # Jupyter
 .ipynb_checkpoints
+
+small_model/

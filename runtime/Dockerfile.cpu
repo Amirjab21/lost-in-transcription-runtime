@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # CPU wheels avoid CUDA libraries, TensorFlow, vLLM, Qwen ASR, and the other
