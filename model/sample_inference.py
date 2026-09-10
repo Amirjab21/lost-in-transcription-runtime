@@ -31,15 +31,30 @@ from whisper_lid import decode_with_token_language, load_token_lid_lora_adapter
 
 
 def normalise(text: str) -> list[str]:
-    """Apply the competition's relevant text normalization before WER."""
+    """Match the local competition scorer's text normalization before WER."""
     text = re.sub(r"\[[^\]]+\]", " ", text)
     text = re.sub(r"\(\?+\)", " ", text)
     text = re.sub(r"\(([^()]*)\)", r"\1", text)
-    text = text.replace("~", "").replace("—", " ")
-    return re.sub(r'[¿¡";:,.!?]+', " ", text.casefold()).split()
+    text = text.replace("~", "").replace("#x27;", "'")
+    text = re.sub(r'[¿¡";:]+', " ", text)
+
+    def lowercase_sentence_initial(match: re.Match[str]) -> str:
+        delimiter, first, second = match.group(1), match.group(2), match.group(3)
+        if first.isupper() and not (second and second.isupper()):
+            first = first.lower()
+        return delimiter + first + second
+
+    text = re.sub(r"(^\s*|[.!?—]\s*)([^\W\d_])([^\W\d_]?)", lowercase_sentence_initial, text)
+    text = text.replace("—", ", ")
+    text = re.sub(r",+", " ", text)
+    text = re.sub(r"[!?]+", " ", text)
+    text = text.replace("...", "!ELLIPSIS!").replace(".", " ").replace("!ELLIPSIS!", "...")
+    while " ... " in text:
+        text = text.replace(" ... ", " ")
+    return re.sub(r"  +", " ", text).split()
 
 
-def word_error_rate(reference: str, prediction: str) -> float:
+def word_error_counts(reference: str, prediction: str) -> tuple[int, int]:
     """Compute token-level Levenshtein WER without extra dependencies."""
     reference_words, prediction_words = normalise(reference), normalise(prediction)
     previous = list(range(len(prediction_words) + 1))
@@ -52,7 +67,12 @@ def word_error_rate(reference: str, prediction: str) -> float:
                 previous[column - 1] + (reference_word != prediction_word),
             ))
         previous = current
-    return previous[-1] / len(reference_words) if reference_words else 0.0
+    return previous[-1], len(reference_words)
+
+
+def word_error_rate(reference: str, prediction: str) -> float:
+    errors, reference_words = word_error_counts(reference, prediction)
+    return errors / reference_words if reference_words else 0.0
 
 
 def select_device(requested: str) -> str:
@@ -77,14 +97,15 @@ def first_window_language_labels(model: object, audio_path: Path, language: str)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=10, help="Number of metadata rows to evaluate.")
+    parser.add_argument("--limit", type=int, default=10, help="Number of metadata rows to evaluate; use 0 for all rows.")
     parser.add_argument("--data-dir", type=Path, default=REPOSITORY_ROOT / "data" / "data")
     parser.add_argument("--output", type=Path, default=MODEL_DIR / "sample_inference_results.csv")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--language", default="id", help="Whisper language code used for transcription.")
+    parser.add_argument("--submission-output", type=Path, help="Optional valid competition-format CSV destination.")
     args = parser.parse_args()
-    if args.limit < 1:
-        parser.error("--limit must be positive")
+    if args.limit < 0:
+        parser.error("--limit must be zero (all rows) or positive")
 
     metadata_path = args.data_dir / "metadata.tsv"
     clips_dir = args.data_dir / "clips"
@@ -93,7 +114,8 @@ def main() -> None:
     if not clips_dir.is_dir():
         parser.error(f"Missing clips directory: {clips_dir}")
     with metadata_path.open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))[: args.limit]
+        all_rows = list(csv.DictReader(handle, delimiter="\t"))
+    rows = all_rows if args.limit == 0 else all_rows[: args.limit]
     if not rows:
         parser.error(f"No rows found in {metadata_path}")
 
@@ -112,6 +134,8 @@ def main() -> None:
     model = adapter.merge_and_unload().eval()
 
     results: list[dict[str, str | float]] = []
+    submission_rows: list[dict[str, str]] = []
+    total_errors = total_reference_words = 0
     for index, row in enumerate(rows, start=1):
         audio_path = clips_dir / row["audio_filename"]
         if not audio_path.is_file():
@@ -121,6 +145,9 @@ def main() -> None:
             beam_size=5, condition_on_previous_text=True,
             fp16=device == "cuda", verbose=False,
         )["text"]).strip()
+        clip_errors, clip_reference_words = word_error_counts(row["transcript"], predicted)
+        total_errors += clip_errors
+        total_reference_words += clip_reference_words
         results.append({
             "audio_file_path": str(audio_path),
             "ground_truth_transcript": row["transcript"],
@@ -129,8 +156,9 @@ def main() -> None:
             "predicted_language_labels": json.dumps(
                 first_window_language_labels(model, audio_path, args.language)
             ),
-            "wer": word_error_rate(row["transcript"], predicted),
+            "wer": clip_errors / clip_reference_words if clip_reference_words else 0.0,
         })
+        submission_rows.append({"audio_filename": row["audio_filename"], "transcript": predicted})
         print(f"Processed {index}/{len(rows)} clips")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +170,15 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(results)
     print(f"Wrote {len(results)} rows to {args.output}")
+    if total_reference_words:
+        print(f"Corpus WER: {total_errors / total_reference_words:.6f} ({total_errors}/{total_reference_words} word errors)")
+    if args.submission_output:
+        args.submission_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.submission_output.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=("audio_filename", "transcript"))
+            writer.writeheader()
+            writer.writerows(submission_rows)
+        print(f"Wrote competition-format submission CSV to {args.submission_output}")
 
 
 if __name__ == "__main__":
